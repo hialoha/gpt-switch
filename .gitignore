@@ -1,0 +1,40 @@
+# Python / local environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.runtime/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Runtime data: never publish conversations, receipts or backups
+ssh-results/
+gpt-switch-backups/
+*.sqlite*
+*.db
+*.db-wal
+*.db-shm
+*.jsonl
+*.log
+tmp*/
+
+# Credentials and machine-specific configuration
+.env
+.env.*
+auth.json
+config.toml
+models_cache.json
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+
+# Build / OS / editor output
+build/
+dist/
+*.spec
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
