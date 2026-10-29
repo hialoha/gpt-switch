@@ -11,6 +11,8 @@ htmlcov/
 # Runtime data: never publish conversations, receipts or backups
 ssh-results/
 gpt-switch-backups/
+gpt-switch-config-backups/
+gpt-switch-login/
 *.sqlite*
 *.db
 *.db-wal

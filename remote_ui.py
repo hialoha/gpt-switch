@@ -8,7 +8,7 @@ import ssh_remote
 class RemoteWindow:
     def __init__(self,parent):
         self.parent=parent
-        self.root=tk.Toplevel(parent.root); self.root.title('GPT Switch 2.5 · SSH 远端对话同步'); self.root.geometry('1100x820')
+        self.root=tk.Toplevel(parent.root); self.root.title('GPT Switch 2.6 · SSH 远端对话同步'); self.root.geometry('1100x820')
         body=ttk.Frame(self.root,padding=14); body.pack(fill='both',expand=True)
         ttk.Label(body,text='SSH 远端对话同步',font=('Microsoft YaHei UI',16,'bold')).pack(anchor='w')
         ttk.Label(body,text='操作在选中的远端主机执行；备份留在远端数据库旁。不会修改本机的对话目录索引。').pack(anchor='w',pady=8)
@@ -43,6 +43,7 @@ class RemoteWindow:
         self.adopt_button.pack(side='left')
         self.stop_button=ttk.Button(extra,text='结束已诊断的远端占用进程…',command=self.choose_stop,state='disabled')
         self.stop_button.pack(side='left',padx=8)
+        ttk.Button(extra,text='跟随本机连接与登录态…',command=self.open_connection).pack(side='left',padx=8)
         ttk.Checkbutton(body,text='监控此 SSH 主机：预览后每 10 秒检查占用，释放后自动备份并同步当前目标',variable=self.auto).pack(anchor='w',pady=8)
         columns=('title','model','provider')
         self.table=ttk.Treeview(body,columns=columns,show='headings',height=10)
@@ -74,6 +75,11 @@ class RemoteWindow:
 
     def context(self):
         return self.host_revision,self.host.get().strip(),self.home.get().strip(),self.db.get().strip()
+
+    def open_connection(self):
+        if not self.host.get().strip(): self.report('请先选择 SSH 主机。'); return
+        from connection_ui import ConnectionWindow
+        ConnectionWindow(self)
 
     def confirm_repair(self,result):
         if not result['rows']:

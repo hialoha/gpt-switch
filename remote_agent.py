@@ -17,7 +17,7 @@ import coverage
 def select_codex(home, db):
     candidates=set()
     active=set()
-    try: active={r['path'] for r in holders(db) if Path(r['path']).name.lower() in ('codex','codex.exe')}
+    try: active={r['path'] for r in holders(db) if Path(r['path']).name.lower() in ('codex','codex.exe')} if db else set()
     except RuntimeError: pass
     candidates.update(active)
     path=shutil.which('codex')
@@ -90,6 +90,9 @@ def repair(db,model,provider,request):
 
 
 def execute(request):
+    if request['action'].startswith(('connection_','device_')):
+        import connection_remote
+        return connection_remote.execute(request)
     home=Path(request.get('home') or os.environ.get('CODEX_HOME') or str(Path.home()/'.codex')).expanduser().resolve()
     db=Path(request['db']).expanduser().resolve() if request.get('db') else core.database(home)
     action=request['action']

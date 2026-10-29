@@ -50,7 +50,7 @@ def aliases(path=None):
 def sources():
     root=Path(__file__).parent
     result={name:(root/name).read_text(encoding='utf-8') for name in
-            ('sync_core.py','occupancy.py','coverage.py','discovery.py','remote_agent.py','remote_processes.py')}
+            ('sync_core.py','occupancy.py','coverage.py','discovery.py','remote_agent.py','remote_processes.py','connection_sync.py','connection_remote.py')}
     # Python 3.10 support without pip or changing the remote Python environment.
     import tomllib
     for path in Path(tomllib.__file__).parent.glob('*.py'):
@@ -58,10 +58,28 @@ def sources():
     return result
 
 
-def request(host, action, model='', provider='', home='', db='', cancel_event=None, timeout=60, targets=None, force=False, plan_hash=None):
+def redact_connection_error(text,bundle):
+    if not bundle: return text
+    values=[]
+    def collect(value):
+        if isinstance(value,str) and len(value)>=6: values.append(value)
+        elif isinstance(value,dict):
+            for child in value.values(): collect(child)
+        elif isinstance(value,list):
+            for child in value: collect(child)
+    collect(bundle.get('auth',{}))
+    collect(bundle.get('provider',{}).get('http_headers',{}))
+    collect(bundle.get('provider',{}).get('query_params',{}))
+    for value in sorted(values,key=len,reverse=True): text=text.replace(value,'[REDACTED]')
+    return text
+
+
+def request(host, action, model='', provider='', home='', db='', cancel_event=None, timeout=60, targets=None, force=False, plan_hash=None, connection=None, source_fingerprint='', backup='', stop_backends=True, login_id=''):
     if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.@:-]*',host):
         raise ValueError('请选择有效的 SSH 主机别名，不支持命令或 SSH 参数。')
     package={'sources':sources(),'request':{'action':action,'model':model,'provider':provider,'home':home,'db':db,'targets':targets or [],'force':bool(force),'plan_hash':plan_hash}}
+    package['request'].update(connection=connection,source_fingerprint=source_fingerprint,backup=backup,stop_backends=bool(stop_backends),login_id=login_id)
+    mutating=action in ('apply','terminate','repair','connection_apply','connection_restore')
     remote_command='for p in python3.14 python3.13 python3.12 python3.11 python3.10 python3; do if command -v "$p" >/dev/null 2>&1; then exec "$p" -c '+shlex.quote(BOOTSTRAP)+'; fi; done; echo "No Python 3 found" >&2; exit 127'
     command=['ssh','-o','BatchMode=yes','-o','ConnectTimeout=8','-o','ServerAliveInterval=5',
         '-o','ServerAliveCountMax=2','--',host,remote_command]
@@ -76,24 +94,46 @@ def request(host, action, model='', provider='', home='', db='', cancel_event=No
     deadline=time.monotonic()+timeout
     while worker.is_alive():
         # During a remote write, wait for the acknowledged transaction outcome on close.
-        if (cancel_event is not None and cancel_event.is_set() and action not in ('apply','terminate','repair')) or time.monotonic()>deadline:
+        if (cancel_event is not None and cancel_event.is_set() and not mutating) or time.monotonic()>deadline:
             process.terminate(); worker.join(3)
             if worker.is_alive(): process.kill(); worker.join(2)
-            if action in ('apply','terminate','repair'): raise RuntimeError('SSH 操作结果未知：连接中断/超时。不要直接重试，请重新预览或诊断；远端备份在数据库旁 gpt-switch-backups。')
+            if mutating: raise RuntimeError('SSH 操作结果未知：连接中断/超时。请重新验证，不要盲目重试；配置与数据库备份保存在对应远端目录。')
             raise RuntimeError('SSH 操作已取消或连接超时')
         worker.join(.1)
     if 'error' in outcome: raise outcome['error']
     stdout,stderr=outcome['output']
     if process.returncode:
+        if connection is not None: raise RuntimeError('SSH 凭证同步连接失败（退出码 '+str(process.returncode)+'）；未显示原始输出。请重新验证远端状态。')
         raise RuntimeError('SSH 连接失败（请先在终端确认 ssh '+host+' 能免交互登录）：'+stderr[-1200:])
     try: envelope=json.loads(stdout.strip().splitlines()[-1])
-    except (ValueError,IndexError): raise RuntimeError('远端未返回有效结果：'+stderr[-800:]) from None
-    if not envelope.get('ok'): raise RuntimeError(envelope.get('error','远端操作失败'))
-    if action in ('apply','terminate','repair'):
+    except (ValueError,IndexError):
+        raise RuntimeError('远端未返回有效结果。' if connection is not None else '远端未返回有效结果：'+stderr[-800:]) from None
+    if not envelope.get('ok'): raise RuntimeError(redact_connection_error(envelope.get('error','远端操作失败'),connection))
+    if mutating:
         try:
             import datetime
             folder=Path(__file__).parent/'ssh-results'; folder.mkdir(exist_ok=True)
             receipt={'ssh_host':host,**envelope['result']}
             (folder/(datetime.datetime.now().strftime('%Y%m%d-%H%M%S-%f')+'.json')).write_text(json.dumps(receipt,ensure_ascii=False,indent=2),encoding='utf-8')
         except OSError: pass
-    return envelope['result']
+    result=envelope['result']
+    if action.startswith('device_'): result['ssh_alias']=host
+    return result
+
+
+def cleanup_logins(pending,sessions):
+    """Best-effort cancellation on desktop exit; receives metadata, never credentials."""
+    sessions=list(sessions)
+    if pending is not None:
+        try:
+            result=pending.result()
+            if isinstance(result,dict) and result.get('login_id') and result.get('ssh_alias') and result.get('status') in ('starting','awaiting-user'):
+                sessions.append({'host':result['ssh_alias'],'home':result['home'],'db':result.get('db',''),'login_id':result['login_id']})
+        except Exception: pass
+    seen=set()
+    for item in sessions:
+        key=(item['host'],item['login_id'])
+        if key in seen: continue
+        seen.add(key)
+        try: request(item['host'],'device_cancel',home=item['home'],db=item['db'],login_id=item['login_id'],timeout=8)
+        except Exception: pass

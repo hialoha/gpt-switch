@@ -48,9 +48,12 @@ def find_codex():
 
 
 class Client:
-    def __init__(self, home, executable=None, timeout=25, cancel_event=None):
+    def __init__(self, home, executable=None, timeout=25, cancel_event=None, clean_connection_env=False):
         self.cancel_event=cancel_event
         env = dict(os.environ, CODEX_HOME=str(Path(home).resolve()))
+        if clean_connection_env:
+            for key in ('OPENAI_API_KEY','OPENAI_BASE_URL','OPENAI_API_BASE','CODEX_API_KEY','CODEX_MODEL_PROVIDER'):
+                env.pop(key,None)
         self.p = subprocess.Popen([executable or find_codex(), 'app-server'],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             text=True, encoding='utf-8', env=env, cwd=str(Path(home).resolve()),
@@ -84,7 +87,11 @@ class Client:
             if message.get('id') != serial: continue
             if 'error' in message:
                 # Do not display raw server messages, which may contain credential URLs.
-                raise RuntimeError('Codex 无法完成 '+method+'（错误码 '+str(message['error'].get('code'))+'）')
+                raw=str(message['error'].get('message','')).lower()
+                category=('workspace-401' if 'workspace' in raw and ('401' in raw or 'unauthorized' in raw)
+                    else 'auth-401' if '401' in raw or 'unauthorized' in raw
+                    else 'network' if any(s in raw for s in ('connection','timeout','tls','network')) else 'rpc-error')
+                raise RuntimeError('Codex '+method+'：'+category+'（错误码 '+str(message['error'].get('code'))+'）')
             return message.get('result', {})
 
     def close(self):

@@ -16,11 +16,12 @@ import occupancy
 class App:
     def __init__(self, root, auto_discover=True):
         self.root = root
-        root.title('GPT Switch 2.5 · Codex 对话模型同步')
+        root.title('GPT Switch 2.6 · Codex 对话模型同步')
         root.geometry('1080x760')
         root.minsize(980, 700)
         self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         self.future = None
+        self.auth_sessions={}
         self.job=('idle',False,None)
         self.last_backup = None
         self.next_check = 0
@@ -316,9 +317,15 @@ class App:
         for b in self.actions[:2]: b.configure(state='disabled')
 
     def quit(self):
+        if self.closing: return
         self.auto.set(False); self.pending_action=None; self.closing=True; self.cancel_event.set()
+        cleaning=bool(self.auth_sessions) or bool(self.future and not self.future.done() and self.job[0]=='remote')
+        if cleaning:
+            import ssh_remote
+            pending=self.future
+            self.future=self.pool.submit(ssh_remote.cleanup_logins,pending,list(self.auth_sessions.values()))
         if self.future and not self.future.done():
-            self.future.cancel()
+            if not cleaning: self.future.cancel()
             self.report('正在安全退出：SSH 只读操作会取消，已发送的远端写入将等待事务结果…' if self.job[0]=='remote' else '正在退出：取消后台操作并回滚未提交修改…')
             self.root.after(100,self.tick)
         else:
